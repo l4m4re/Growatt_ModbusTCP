@@ -496,6 +496,12 @@ MIN_TL_XH_3000_10000_V201 = {
         3018: {'name': 'tl_xh_priority_mode', 'maps_to': 'priority_mode',
                'scale': 1, 'unit': '', 'access': 'RW',
                'desc': 'Priority mode (0=Load First, 2=Battery First, 3=Grid First — hardware confirmed MIN TL-XH)'},
+        # Portal labels this MIN TL-XH register "Off-grid Battery Discharge Stop SOC".
+        # Live validation on MIN 6000 TL-XH read 10 while the portal showed 10; this is
+        # distinct from 3067, the portal's on-grid discharge stop SOC.
+        3037: {'name': 'off_grid_discharge_stopped_soc', 'scale': 1, 'unit': '%', 'access': 'RW',
+               'valid_range': (1, 100),
+               'desc': 'Off-grid battery discharge stop SOC (portal mapping, live validated)'},
         3047: {'name': 'batt_first_charge_power_rate',    'scale': 1, 'unit': '%', 'access': 'RW',
                'valid_range': (1, 100), 'desc': 'Charge power rate when Battery First mode (1-100%)'},
         3048: {'name': 'batt_first_charge_stopped_soc',   'scale': 1, 'unit': '%', 'access': 'RW',
