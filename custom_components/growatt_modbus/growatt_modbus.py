@@ -4411,8 +4411,7 @@ class GrowattModbus:
     # 2026/8/22 09:42:17 in the same registers. The year is the full four digits, not an
     # offset.
     #
-    # Off-grid reads the same, and writes are still withheld — but for a narrower reason
-    # than this note used to give (#444).
+    # Off-grid reads the same, with a different year encoding when written.
     #
     # An SPF 5000 ES on firmware 067.02 has now been read against a known-good clock:
     #
@@ -4425,16 +4424,9 @@ class GrowattModbus:
     # any other, and is no longer refused. (Register 51 read 0, consistent with the
     # document's Chip Select rather than a weekday; the off-grid weekday is at 72.)
     #
-    # Writing was withheld for the same reason a four-digit read could not settle it: V1.39
-    # accepts the year as an offset (write 26, read back 2026), an asymmetry in neither
-    # protocol document, and there was no way to know which form off-grid wanted without
-    # actually writing to one.
-    #
-    # That measurement now exists. On an SPF 3000-6000 ES PLUS (#443), with a friend at the
+    # The year encoding was settled with a controlled write. On an SPF 3000-6000 ES PLUS
+    # (#443), with a friend at the
     # inverter to watch the front panel:
-    #
-    #   holding 49 (minute) written 55 -> read back 55, panel showed 55 -> single-register
-    #   writes into this block work on off-grid, same as every other family.
     #
     #   holding 45 (year) written 26 -> panel briefly showed 26, then reverted to 2026 on
     #   its own. Written 2027 -> panel showed 2027, read back 2027, held.
@@ -4447,25 +4439,14 @@ class GrowattModbus:
     # same clock block with no reason yet to expect it differs, but has not been tested
     # directly - if it turns out to disagree, that is a real report to want on #443.
     #
-    # Note for anyone tempted to cite the old reason: write_inverter_time() writes 45-50
-    # only. It has never touched register 51.
+    # Register 51 is read as part of the documented clock block, but is a weekday/chip
+    # select field rather than part of the six date/time fields we set.
     CLOCK_REGISTER_START = 45
     CLOCK_REGISTER_COUNT = 7  # 45-51 inclusive
 
-    # Pacing between the six single-register clock writes. The reference implementation
-    # spaces them by 200 ms; these registers are committed individually and are not a
-    # burst target.
-    CLOCK_WRITE_INTERVAL = 0.2
-
-    # How far the read-back may differ before it is reported. Six paced writes take about a
-    # second, and the seconds field is written first-to-last, so the clock legitimately
-    # lands a little behind the value asked for.
+    # How far the read-back may differ before it is reported. A single FC16 request avoids
+    # the multi-second drift and invalid-seconds failures caused by six queued writes.
     CLOCK_VERIFY_TOLERANCE = 5.0
-
-    # Worst-case wall time for the six paced writes including Modbus round-trips. Used
-    # only to keep the sequence off a minute boundary; being generous here costs at most
-    # this many seconds of waiting, and only on a sync that starts late in a minute.
-    CLOCK_WRITE_BUDGET = 6.0
 
     @property
     def is_clock_readable(self) -> bool:
@@ -4482,10 +4463,10 @@ class GrowattModbus:
         """Whether this profile's clock can be *set*.
 
         True everywhere now. Off-grid used to be excluded because a four-digit read said
-        nothing about which form register 45 accepts to write - that was settled on an
-        SPF 3000-6000 ES PLUS with a controlled single-register test (#443), and it takes
-        the opposite form from V1.39: the full year, not an offset. See the note above
-        CLOCK_REGISTER_START, and write_inverter_time() for where the two forms diverge.
+        nothing about which form register 45 accepts to write. A controlled test on an
+        SPF 3000-6000 ES PLUS (#443) established the opposite form from V1.39: the full
+        year, not an offset. See the note above CLOCK_REGISTER_START and
+        write_inverter_time() for where the two forms diverge.
         """
         return True
 
@@ -4521,104 +4502,53 @@ class GrowattModbus:
             return None
 
     def write_inverter_time(self, when: datetime) -> bool:
-        """Set the inverter's real-time clock.
+        """Set the inverter's real-time clock with one atomic FC16 transaction.
 
-        Follows the method in a published, working ESP32 implementation for an SPH5000
-        (cosminpop.uk, Feb 2026), corroborated by an ESPHome forum finding three years
-        earlier and by two failures on this tracker:
+        The six date/time registers form one value. Sending them individually allows
+        polling traffic to interleave between fields and can leave a partial clock or an
+        invalid seconds value when the gateway is slow. Register 51 is read with the clock
+        block but is not part of the date/time write.
 
-        **The year is written as `year - 2000`, and read back as the full four digits.**
-        Write 26, read 2026. That asymmetry is the whole problem — it is not in either
-        protocol document for the V1.39 range, and an earlier version of this method
-        detected the format by reading the register, which can only ever produce the
-        four-digit form and therefore always wrote a value the inverter rejects (#393).
-
-        **Off-grid takes the opposite form: the full year, not an offset.** Confirmed on an
-        SPF 3000-6000 ES PLUS by writing register 45 directly and watching the front panel
-        (#443) — `26` is accepted, displayed, and then quietly reverted to what was already
-        there; `2027` is accepted and held. Guessing the V1.39 form on an off-grid inverter
-        would not have errored, and the front panel would have shown it working, right up
-        until the write silently discarded itself.
-
-        Each field is written on its own with FC 0x06, spaced apart, in the reference's
-        order. Its author notes that settings registers on that hardware generally need
-        FC 0x10 and answer FC 0x06 with Illegal Function, but that the RTC block at 45-50
-        is an exception and does take single writes. The same SPF confirmed single writes
-        into this block work at all, by writing its minute register and reading it back
-        before the year was ever touched.
-
-        The year goes first on purpose. It is the field observed to fail, so a refusal
-        leaves the clock untouched rather than half-written — a MIN TL-X reset its RTC to
-        the year 2000 when five fields landed and the year did not.
+        The year encoding is profile-dependent: V1.39 devices take ``year - 2000`` while
+        off-grid profiles take the full year. A refused FC16 block is reported directly;
+        there is deliberately no single-register fallback.
         """
-        # Seconds is written last, roughly 1.2-1.5 s after the first field on TCP and
-        # longer on a slow gateway. Writing `when.second` therefore lands the clock that
-        # far behind: a reporter measured a consistent 1.4-1.6 s residual immediately
-        # after every sync, which was this and not his inverter (#393). The seconds value
-        # is computed at the moment it is written instead, from elapsed monotonic time.
-        #
-        # That compensation can only push seconds forward, so it must never cross a minute
-        # boundary - the minute has already been written by then. If there is not room in
-        # the current minute, wait for the next one and start there.
-        if when.second + self.CLOCK_WRITE_BUDGET >= 60:
+        # Keep minute and seconds coherent if the action starts at the end of a minute.
+        # The complete block is then sent immediately, with no per-field pacing.
+        if when.second >= 55:
             wait = 60 - when.second
             logger.debug(
-                "[CLOCK] Starting %.0f s late in the minute; waiting for the next one so "
-                "the write cannot cross the boundary", when.second,
+                "[CLOCK] Starting %.0f s late in the minute; waiting for the next one",
+                when.second,
             )
             time.sleep(wait)
             when = when + timedelta(seconds=wait)
 
-        # Year first, in whichever form this hardware family takes. Off-grid wants the
-        # full four digits; everything else wants the offset from 2000 (#443). Seconds is
-        # a placeholder - see below.
         is_offgrid = self.register_map.get('offgrid_protocol', False)
         year_value = when.year if is_offgrid else when.year - 2000
-        fields = [
-            (self.CLOCK_REGISTER_START,     year_value,       "year"),
-            (self.CLOCK_REGISTER_START + 1, when.month,       "month"),
-            (self.CLOCK_REGISTER_START + 2, when.day,         "day"),
-            (self.CLOCK_REGISTER_START + 3, when.hour,        "hour"),
-            (self.CLOCK_REGISTER_START + 4, when.minute,      "minute"),
-            (self.CLOCK_REGISTER_START + 5, when.second,      "second"),
-        ]
+        values = [year_value, when.month, when.day, when.hour, when.minute, when.second]
 
         logger.info(
-            "[CLOCK] Setting inverter clock to %s (year written as %d, %s form)",
+            "[CLOCK] Setting inverter clock to %s with one FC16 block 45-50 "
+            "(year written as %d, %s form)",
             when.strftime("%Y-%m-%d %H:%M:%S"), year_value,
             "off-grid" if is_offgrid else "offset",
         )
 
-        started = time.monotonic()
-
-        for index, (register, value, label) in enumerate(fields):
-            if index:
-                # The reference paces its writes; these registers are not a burst target
-                # and the inverter has to commit each one.
-                time.sleep(self.CLOCK_WRITE_INTERVAL)
-
-            if label == "second":
-                # How long the five preceding writes actually took, rather than an
-                # assumption about it - a LoRa bridge is far slower than TCP.
-                value = when.second + int(round(time.monotonic() - started))
-
-            if self.write_single_register_any_fc(register, value):
-                continue
-
-            if index == 0:
+        try:
+            if not self.write_registers(self.CLOCK_REGISTER_START, values):
                 raise ModbusWriteError(
-                    register, [value],
-                    f"the inverter refused register {register} (year, written as "
-                    f"{value}). Nothing else was written, so the clock is exactly as it "
-                    f"was. This model may not allow its clock to be set over Modbus.",
+                    self.CLOCK_REGISTER_START,
+                    values,
+                    "write_registers returned failure",
                 )
-
+        except ModbusWriteError as err:
             raise ModbusWriteError(
-                register, [value],
-                f"register {register} ({label}) was refused after the year had already "
-                f"been written, so the clock is now part-updated. Check it in the Growatt "
-                f"app.",
-            )
+                self.CLOCK_REGISTER_START,
+                values,
+                "the inverter refused the atomic FC16 clock block 45-50; "
+                f"no individual-register fallback was attempted ({err.error_message})",
+            ) from err
 
         self._verify_clock_write(when)
         return True

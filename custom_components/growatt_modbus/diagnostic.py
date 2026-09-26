@@ -828,9 +828,9 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             # from a service handler shows only "Unknown error" and sends the user to the
             # log to find out what happened.
             raise HomeAssistantError(
-                f"Could not set the inverter clock: {err}. The clock registers (45-51) were "
-                f"tried as one block and then individually. If your model does not accept "
-                f"them, the time can still be set from the Growatt app."
+                f"Could not set the inverter clock: {err}. The six date/time registers "
+                f"(45-50) were sent as one FC16 block; no partial fallback was attempted. "
+                f"If your model does not accept that block, set the time from the Growatt app."
             ) from err
         if not written:
             raise HomeAssistantError("The inverter rejected the clock write")

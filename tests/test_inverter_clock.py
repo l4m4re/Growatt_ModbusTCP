@@ -40,18 +40,12 @@ _gm = importlib.import_module("growatt_under_test.growatt_modbus")
 
 
 class _FakeClock:
-    """Records writes and serves a scripted clock reading.
-
-    Both write paths are captured. The weekday (51) is always written on its own — never as
-    part of the block — because not every model implements it and an FC16 spanning a missing
-    address fails as a whole, taking the six good registers with it.
-    """
+    """Records writes and serves a scripted clock reading."""
 
     def __init__(self, registers=None):
         self.registers = registers
-        self.written = None      # the FC16 block, if one was accepted
-        self.singles = {}        # register -> value, for single writes
-        self.order = []          # registers in the order they were written
+        self.written = None
+        self.singles = {}
 
     def read_holding_registers(self, start, count):
         self.last_read = (start, count)
@@ -65,7 +59,6 @@ class _FakeClock:
 
     def write_single(self, register, value):
         self.singles[register] = value
-        self.order.append(register)
         return True
 
 
@@ -129,110 +122,48 @@ def test_a_short_response_is_not_decoded():
 # --------------------------------------------------------------------------
 
 def test_the_year_is_written_as_an_offset_from_2000():
-    """The whole point. `create_write_single_command(ctl, 45, time.year - 2000)`."""
+    """V1.39 devices take a two-digit year in the atomic clock block."""
     client = _client(registers=[2026, 8, 22, 14, 8, 19, 6])
     client.write_inverter_time(datetime(2026, 8, 25, 9, 30, 5))
-    assert client._fake.singles[45] == 26, "the four-digit year is what the inverter refuses"
+    assert client._fake.written == (45, [26, 8, 25, 9, 30, 5])
+    assert client._fake.singles == {}
 
 
-def test_all_six_fields_are_written_individually_in_order():
-    """The reference writes one register per field rather than a block, year first."""
-    client = _client(registers=[2026, 8, 22, 14, 8, 19, 6])
-    client.write_inverter_time(datetime(2026, 8, 25, 9, 30, 5))
-
-    assert client._fake.order == [45, 46, 47, 48, 49, 50]
-    # Date and time down to the minute are written verbatim. Seconds is not - it is
-    # compensated for how long the preceding writes took, so it is asserted separately.
-    assert {r: v for r, v in client._fake.singles.items() if r != 50} == {
-        45: 26, 46: 8, 47: 25, 48: 9, 49: 30,
-    }
-
-
-def test_the_seconds_field_compensates_for_how_long_the_write_took():
-    """Seconds is written last, about 1.2-1.5 s after the first field on TCP and longer on
-    a slow gateway. Writing the captured value lands the clock that far behind, and a
-    reporter measured exactly that as a consistent 1.4-1.6 s residual after every sync -
-    his inverter was fine, our write path was late (#393).
-
-    The compensation must be measured rather than assumed, because a LoRa bridge is far
-    slower than TCP."""
+def test_all_six_fields_are_written_as_one_block():
+    """The clock cannot be left half-updated by interleaved bus traffic."""
     client = _client(registers=[2026, 8, 22, 14, 8, 19, 6])
     client.write_inverter_time(datetime(2026, 8, 25, 9, 30, 5))
 
-    written = client._fake.singles[50]
-    assert written > 5, "seconds was written verbatim; the clock will land behind"
-    assert written <= 5 + client.CLOCK_WRITE_BUDGET, (
-        f"seconds compensated by more than the write budget: {written}"
-    )
+    assert client._fake.written == (45, [26, 8, 25, 9, 30, 5])
+    assert client._fake.singles == {}
 
 
 def test_a_sync_late_in_the_minute_waits_for_the_next_one():
-    """The seconds compensation only moves forward, and the minute has already been
-    written by the time it applies - so it must never push seconds past 59. Starting with
-    less than the write budget left in the minute would do exactly that."""
+    """The complete block must not cross a minute boundary while being prepared."""
     client = _client(registers=[2026, 8, 22, 14, 8, 19, 6])
     client.write_inverter_time(datetime(2026, 8, 25, 9, 30, 58))
 
-    assert client._fake.singles[49] == 31, "the minute was not advanced past the boundary"
-    assert client._fake.singles[50] < 60, "seconds overflowed the minute"
+    assert client._fake.written == (45, [26, 8, 25, 9, 31, 0])
 
 
-def test_no_block_write_is_attempted():
-    """A MIN TL-X and an SPH both refused FC 0x10 across this range. The reference uses
-    single writes, and the RTC block is documented there as accepting them even where other
-    settings registers do not."""
+def test_no_single_register_fallback_is_attempted():
+    """A refused atomic write must not be replaced by a partial sequence."""
     client = _client(registers=[2026, 8, 22, 14, 8, 19, 6])
-    client.write_registers = lambda register, values: pytest.fail(
-        f"a block write to {register} was attempted"
+    client.write_single_register_any_fc = lambda r, v: pytest.fail(
+        f"a single-register write to {r} was attempted"
     )
     assert client.write_inverter_time(datetime(2026, 8, 25, 9, 30, 5)) is True
 
 
-def test_the_writes_are_paced():
-    """The reference spaces them; these registers are committed one at a time."""
+def test_a_refused_block_is_reported_without_fallback():
     client = _client(registers=[2026, 8, 22, 14, 8, 19, 6])
-    assert client.CLOCK_WRITE_INTERVAL > 0
-
-    sleeps = []
-    import growatt_under_test.growatt_modbus as gm
-    original = gm.time.sleep
-    gm.time.sleep = lambda s: sleeps.append(s)
-    try:
-        client.write_inverter_time(datetime(2026, 8, 25, 9, 30, 5))
-    finally:
-        gm.time.sleep = original
-
-    # Five gaps between six writes, and none before the first.
-    assert len(sleeps) == 5
-    assert all(s == client.CLOCK_WRITE_INTERVAL for s in sleeps)
-
-
-def test_a_refused_year_leaves_the_clock_untouched():
-    """The year goes first precisely so this is possible. A MIN TL-X reset its RTC to the
-    year 2000 when five fields landed and the year did not."""
-    client = _client(registers=[2026, 8, 22, 14, 8, 19, 6])
-    client.write_single_register_any_fc = lambda r, v: r != 45
+    client.write_registers = lambda r, v: False
 
     with pytest.raises(_gm.ModbusWriteError) as excinfo:
         client.write_inverter_time(datetime(2026, 8, 25, 9, 30, 5))
 
-    assert client._fake.singles == {}, "fields were written after the year was refused"
-    assert "Nothing else was written" in str(excinfo.value)
-
-
-def test_a_later_field_refused_is_reported_as_a_partial_write():
-    """If the year lands and something after it does not, the clock really is part-updated
-    and the user must be told rather than left to notice."""
-    client = _client(registers=[2026, 8, 22, 14, 8, 19, 6])
-    real = client._fake.write_single
-    client.write_single_register_any_fc = lambda r, v: False if r == 48 else real(r, v)
-
-    with pytest.raises(_gm.ModbusWriteError) as excinfo:
-        client.write_inverter_time(datetime(2026, 8, 25, 9, 30, 5))
-
-    message = str(excinfo.value)
-    assert "part-updated" in message
-    assert "hour" in message, "the failing field is not named"
+    assert client._fake.singles == {}
+    assert "atomic FC16" in str(excinfo.value)
 
 
 def test_verification_compares_against_the_four_digit_year():
@@ -275,7 +206,7 @@ def test_off_grid_writes_the_full_year_not_an_offset():
     confirmed family, where 26 is exactly right. Writing the full year is what held."""
     client = _client(offgrid=True, registers=[2026, 8, 22, 14, 8, 19, 6])
     client.write_inverter_time(datetime(2026, 8, 25, 9, 30, 5))
-    assert client._fake.singles[45] == 2026, (
+    assert client._fake.written == (45, [2026, 8, 25, 9, 30, 5]), (
         "an off-grid inverter was sent the year-2000 offset, which this hardware accepts, "
         "displays, and silently discards"
     )
@@ -286,7 +217,7 @@ def test_non_offgrid_still_gets_the_offset_form():
     year."""
     client = _client(offgrid=False, registers=[2026, 8, 22, 14, 8, 19, 6])
     client.write_inverter_time(datetime(2026, 8, 25, 9, 30, 5))
-    assert client._fake.singles[45] == 26
+    assert client._fake.written == (45, [26, 8, 25, 9, 30, 5])
 
 
 def test_off_grid_write_is_no_longer_refused():
@@ -294,7 +225,7 @@ def test_off_grid_write_is_no_longer_refused():
     ever touching it."""
     client = _client(offgrid=True, registers=[2026, 8, 22, 14, 8, 19, 6])
     assert client.write_inverter_time(datetime(2026, 8, 25, 9, 30, 5)) is True
-    assert client._fake.singles, "nothing was written at all"
+    assert client._fake.written == (45, [2026, 8, 25, 9, 30, 5])
 
 
 # --------------------------------------------------------------------------

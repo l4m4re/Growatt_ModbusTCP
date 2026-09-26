@@ -237,8 +237,8 @@ sync_inverter_time:
     rather than yours, so a schedule set for 13:00 starts whenever the drifted clock
     reaches 13:00. Returns the drift that was corrected. Confirmed working on MIN TL-X and,
     with a different year encoding, on off-grid (SPF/SPE) models. Each field is written
-    separately and the year goes first, so a refusal leaves your clock untouched rather
-    than half-set.
+    as one atomic FC16 block (registers 45-50), so a refusal does not leave a partially
+    updated clock. Register 51 is read-only weekday or chip-select data and is not written.
   fields:
     device_id:
       name: Device

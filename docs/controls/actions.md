@@ -144,16 +144,11 @@ integration no longer raised the clock drift notification that had appeared on t
 before it. That is the only model confirmed so far; if you run the action on anything else,
 [#393](https://github.com/0xAHA/Growatt_ModbusTCP/issues/393) is the place to say so.
 
-Two consequences for how the action behaves:
-
-- Each field is written **individually**, not as a block. Both models above refused a
-  multi-register write across this range, and the reference implementation notes that while
-  settings registers on that hardware generally require FC `0x10`, the RTC block at 45-50 is
-  an exception and does accept single writes.
-- The **year is written first**. It is the field that fails when something is wrong, so a
-  refusal leaves your clock untouched rather than half-set. An earlier build wrote it last,
-  five fields landed, and the inverter reset its clock to the year 2000 rather than keep a
-  date it considered inconsistent.
+The six date/time fields are written together as one atomic Modbus FC `0x10` block covering
+registers 45-50. This prevents polling traffic or a slow gateway from interleaving between
+fields and leaving a partially updated clock. Register 51 is read as part of the documented
+clock range, but is weekday or chip-select data and is not written. If the block is refused,
+the action reports the failure and does not fall back to individual writes.
 
 The action reads the clock back afterwards and logs a warning if it does not match.
 
