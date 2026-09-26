@@ -74,6 +74,14 @@ def test_the_default_is_unchanged_at_five_minutes():
     assert "_CLOCK_DRIFT_THRESHOLD_S = 300" in COORDINATOR
 
 
+def test_comparison_uses_home_assistant_local_time():
+    """Compare the wall-clock RTC with HA's configured zone, not the host zone."""
+    body = _check()
+
+    assert "dt_util.now()" in body
+    assert "datetime.now()" not in body
+
+
 @pytest.mark.parametrize("drift_s,expected", [
     (3600, True),      # the reporter's case, exactly one hour
     (-3600, True),     # and the other direction
