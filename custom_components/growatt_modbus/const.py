@@ -1019,8 +1019,9 @@ WRITABLE_REGISTERS = {
         'desc': 'SOC to stop charging from the grid (ub_ac_charging_stop_soc). Separate from '
                 'Charge Stopped SOC (3048), which applies to charging from any source (#372)'
     },
-    # Grid-charge power ceiling. The portal write was captured on MIN TL-XH as raw 13 for
-    # 1.3 kW. The same register is read-only on the existing MOD profile, so the control is
+
+    # Validated on MIN 6000 TL-XH, firmware: ALBA180101/ZABA-0022.
+    # The same register is read-only on the existing MOD profile, so the control is
     # offered only by profiles that explicitly mark it writable.
     'ac_charge_max_power': {
         'register': 3311,
