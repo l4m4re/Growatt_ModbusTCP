@@ -5,8 +5,8 @@ On a MIN 4200TL-XH, period 1 set in ShinePhone as Battery First 00:00-07:00 read
 1794. That is the MOD TL3-XH packing exactly, and V1.39 documents the same nine "Time n
 (xh)" periods for the XH family, so the profile reuses the MOD TOU entities.
 
-Reads are confirmed; Modbus writes are not. The entities are therefore created disabled,
-which the profile asks for with `tou_disabled_by_default`.
+ShinePhone writes for the TOU settings have now been confirmed. The integration exposes
+the entities by default so their Modbus write path can be tested directly.
 
 ShinePhone's Allow Grid Charge setting tracked holding register 3049 in both states:
 Disabled read 0 and Enabled read 1. The control stays disabled by default pending a write test.
@@ -82,8 +82,8 @@ def test_end_minute_steps_read_back(raw, minute):
     assert ((data.mod_tou_1_end >> 8) & 0x1F, data.mod_tou_1_end & 0xFF) == (7, minute)
 
 
-def test_min_tl_xh_asks_for_tou_entities_disabled_and_mod_does_not():
-    assert _profiles.REGISTER_MAPS[MAP].get("tou_disabled_by_default") is True
+def test_min_tl_xh_tou_entities_are_enabled_like_mod():
+    assert not _profiles.REGISTER_MAPS[MAP].get("tou_disabled_by_default", False)
     assert not _profiles.REGISTER_MAPS["MOD_6000_15000TL3_XH"].get("tou_disabled_by_default")
 
 
@@ -125,6 +125,13 @@ def test_both_tou_platforms_honour_the_disabled_flag(platform):
     body = ast.get_source_segment(source, setup)
     assert "tou_disabled_by_default" in body
     assert "_attr_entity_registry_enabled_default = False" in body
+
+
+def test_setup_migrates_integration_disabled_tou_entities_when_default_is_enabled():
+    source = (COMPONENT / "__init__.py").read_text(encoding="utf-8")
+    assert "_enable_tou_entities_when_profile_allows" in source
+    assert "RegistryEntryDisabler.INTEGRATION" in source
+    assert "disabled_by=None" in source
 
 
 @pytest.mark.parametrize("raw", [1, 2, 3])

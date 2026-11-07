@@ -143,6 +143,31 @@ def _migrate_entity_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
             _try_rename(current, _new_eid(domain, device_type, friendly))
 
 
+def _enable_tou_entities_when_profile_allows(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Re-enable TOU entities that were disabled by an earlier integration default."""
+    register_map = entry.data.get(CONF_REGISTER_MAP, "")
+    if REGISTER_MAPS.get(register_map, {}).get("tou_disabled_by_default", False):
+        return
+
+    entity_registry = er.async_get(hass)
+    for period in range(1, 10):
+        for domain, suffix in (
+            ("select", "priority"),
+            ("select", "enable"),
+            ("time", "start"),
+            ("time", "end"),
+        ):
+            unique_id = f"{entry.entry_id}_mod_tou_{period}_{suffix}"
+            entity_id = entity_registry.async_get_entity_id(domain, DOMAIN, unique_id)
+            if not entity_id:
+                continue
+            entity = entity_registry.async_get(entity_id)
+            if entity is None or entity.disabled_by is not er.RegistryEntryDisabler.INTEGRATION:
+                continue
+            entity_registry.async_update_entity(entity_id, disabled_by=None)
+            _LOGGER.info("Re-enabled TOU entity %s after profile default changed", entity_id)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Growatt Modbus from a config entry."""
 
@@ -554,6 +579,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _migrate_entity_ids(hass, entry)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    if not REGISTER_MAPS.get(entry.data.get(CONF_REGISTER_MAP, ""), {}).get(
+        "tou_disabled_by_default", False
+    ):
+        hass.loop.call_later(1, _enable_tou_entities_when_profile_allows, hass, entry)
 
     return True
 
