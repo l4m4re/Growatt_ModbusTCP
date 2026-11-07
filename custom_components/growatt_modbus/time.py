@@ -378,7 +378,7 @@ class GrowattModTouTime(GrowattEntity, TimeEntity):
         if is_start:
             self._register = period_def["start_reg"]
             self._data_field = period_def["start_field"]
-            self._attr_name = f"TOU Period {self._period} Start"
+            self._attr_name = f"TOU Period {self._period} Begin"
         else:
             self._register = period_def["end_reg"]
             self._data_field = period_def["end_field"]

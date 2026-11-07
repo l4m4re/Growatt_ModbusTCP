@@ -905,7 +905,7 @@ class GrowattModTouPriority(GrowattEntity, SelectEntity):
         self._start_field = period_def["start_field"]
         self._end_field = period_def["end_field"]
 
-        self._attr_name = f"TOU Period {self._period} Priority"
+        self._attr_name = f"TOU Period {self._period} Mode"
 
 
     @property
@@ -987,7 +987,7 @@ class GrowattModTouEnable(GrowattEntity, SelectEntity):
         self._start_field = period_def["start_field"]
         self._end_field = period_def["end_field"]
 
-        self._attr_name = f"TOU Period {self._period} Enable"
+        self._attr_name = f"TOU Period {self._period} On/Off"
 
 
     @property

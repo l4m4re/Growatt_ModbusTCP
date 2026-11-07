@@ -134,6 +134,17 @@ def test_setup_migrates_integration_disabled_tou_entities_when_default_is_enable
     assert "disabled_by=None" in source
 
 
+def test_tou_entity_names_include_the_requested_field_order():
+    select_source = (COMPONENT / "select.py").read_text(encoding="utf-8")
+    time_source = (COMPONENT / "time.py").read_text(encoding="utf-8")
+    init_source = (COMPONENT / "__init__.py").read_text(encoding="utf-8")
+    assert 'f"TOU Period {self._period} Mode"' in select_source
+    assert 'f"TOU Period {self._period} On/Off"' in select_source
+    assert 'f"TOU Period {self._period} Begin"' in time_source
+    assert 'f"TOU Period {self._period} End"' in time_source
+    assert "entity_registry.async_update_entity(entity_id, original_name=desired_name)" in init_source
+
+
 @pytest.mark.parametrize("raw", [1, 2, 3])
 def test_battery_working_status_is_read_from_31001(raw):
     data = _client({31000: 6, 31001: raw}, {}).read_all_data()

@@ -162,10 +162,37 @@ def _enable_tou_entities_when_profile_allows(hass: HomeAssistant, entry: ConfigE
             if not entity_id:
                 continue
             entity = entity_registry.async_get(entity_id)
-            if entity is None or entity.disabled_by is not er.RegistryEntryDisabler.INTEGRATION:
+            if entity is None:
                 continue
-            entity_registry.async_update_entity(entity_id, disabled_by=None)
-            _LOGGER.info("Re-enabled TOU entity %s after profile default changed", entity_id)
+            if entity.disabled_by is er.RegistryEntryDisabler.INTEGRATION:
+                entity_registry.async_update_entity(entity_id, disabled_by=None)
+                _LOGGER.info("Re-enabled TOU entity %s after profile default changed", entity_id)
+
+
+def _migrate_tou_entity_names(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Update existing TOU labels without changing their entity IDs."""
+    entity_registry = er.async_get(hass)
+    for period in range(1, 10):
+        for domain, suffix in (
+            ("select", "priority"),
+            ("select", "enable"),
+            ("time", "start"),
+            ("time", "end"),
+        ):
+            unique_id = f"{entry.entry_id}_mod_tou_{period}_{suffix}"
+            entity_id = entity_registry.async_get_entity_id(domain, DOMAIN, unique_id)
+            if not entity_id:
+                continue
+            desired_name = {
+                ("time", "start"): f"TOU Period {period} Begin",
+                ("time", "end"): f"TOU Period {period} End",
+                ("select", "priority"): f"TOU Period {period} Mode",
+                ("select", "enable"): f"TOU Period {period} On/Off",
+            }[(domain, suffix)]
+            entity = entity_registry.async_get(entity_id)
+            if entity is not None and entity.original_name != desired_name:
+                entity_registry.async_update_entity(entity_id, original_name=desired_name)
+                _LOGGER.info("Updated TOU entity name %s to %s", entity_id, desired_name)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -579,6 +606,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _migrate_entity_ids(hass, entry)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    _migrate_tou_entity_names(hass, entry)
 
     if not REGISTER_MAPS.get(entry.data.get(CONF_REGISTER_MAP, ""), {}).get(
         "tou_disabled_by_default", False
