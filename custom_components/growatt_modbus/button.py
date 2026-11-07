@@ -17,6 +17,7 @@ from .battery_wake import BatteryWakeError, wake_apx_battery
 from .const import CONF_REGISTER_MAP, DEVICE_TYPE_BATTERY, DEVICE_TYPE_INVERTER
 from .entity import GrowattEntity
 from .growatt_modbus import ModbusWriteError
+from .tou_buttons import GrowattTouApplyButton, GrowattTouReloadButton
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,6 +49,12 @@ async def async_setup_entry(
     # Keep this opt-in and profile-specific until more MIN firmware variants are measured.
     if config_entry.data.get(CONF_REGISTER_MAP) == MIN_TL_XH_WAKE_PROFILE:
         entities.append(GrowattWakeApxBatteryButton(coordinator, config_entry))
+
+    holding_registers = coordinator.modbus_client.register_map.get("holding_registers", {})
+    if 3038 in holding_registers and not coordinator.tou_legacy_locked:
+        for period in range(1, 10):
+            entities.append(GrowattTouApplyButton(coordinator, config_entry, period))
+            entities.append(GrowattTouReloadButton(coordinator, config_entry, period))
 
     async_add_entities(entities)
 

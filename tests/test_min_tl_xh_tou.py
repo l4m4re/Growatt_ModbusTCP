@@ -127,11 +127,9 @@ def test_both_tou_platforms_honour_the_disabled_flag(platform):
     assert "_attr_entity_registry_enabled_default = False" in body
 
 
-def test_setup_migrates_integration_disabled_tou_entities_when_default_is_enabled():
+def test_setup_has_no_legacy_tou_entity_migration():
     source = (COMPONENT / "__init__.py").read_text(encoding="utf-8")
-    assert "_enable_tou_entities_when_profile_allows" in source
-    assert "RegistryEntryDisabler.INTEGRATION" in source
-    assert "disabled_by=None" in source
+    assert "_enable_tou_entities_when_profile_allows" not in source
 
 
 def test_tou_entity_names_include_the_requested_field_order():
@@ -143,6 +141,18 @@ def test_tou_entity_names_include_the_requested_field_order():
     assert 'f"TOU Period {self._period} Begin"' in time_source
     assert 'f"TOU Period {self._period} End"' in time_source
     assert "entity_registry.async_update_entity(entity_id, original_name=desired_name)" in init_source
+
+
+def test_mod_tou_uses_the_existing_entities_as_staged_controls():
+    select_source = (COMPONENT / "select.py").read_text(encoding="utf-8")
+    time_source = (COMPONENT / "time.py").read_text(encoding="utf-8")
+    assert 'f"TOU Period {self._period} Mode"' in select_source
+    assert 'f"TOU Period {self._period} On/Off"' in select_source
+    assert 'f"TOU Period {self._period} Begin"' in time_source
+    assert 'f"TOU Period {self._period} End"' in time_source
+    assert "get_tou_editor(self.coordinator).update_draft" in select_source
+    assert "get_tou_editor(self.coordinator).update_draft" in time_source
+    assert "GrowattTouDraft" not in select_source + time_source
 
 
 @pytest.mark.parametrize("raw", [1, 2, 3])

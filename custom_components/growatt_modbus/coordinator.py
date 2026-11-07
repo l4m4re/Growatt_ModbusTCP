@@ -2575,7 +2575,7 @@ class GrowattModbusCoordinator(DataUpdateCoordinator[GrowattData]):
 
     @property
     def tou_legacy_locked(self) -> bool:
-        """True when the legacy TOU controls cannot work on this firmware (#485)."""
+        """True when this firmware rejects the MOD/MIN TL-XH TOU controls (#485)."""
         return tou_legacy_writes_locked(
             REGISTER_MAPS.get(self._register_map_key, {}), self._vpp_protocol_raw)
 

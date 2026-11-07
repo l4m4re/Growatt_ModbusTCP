@@ -51,7 +51,7 @@ def _source_of(node) -> str:
 
 @pytest.mark.parametrize(
     "class_name",
-    ["GrowattGenericTime", "GrowattModTouTime"],
+    ["GrowattGenericTime"],
 )
 def test_the_guard_is_present(class_name):
     body = _source_of(_method(class_name, "async_set_value"))
@@ -66,7 +66,7 @@ def test_the_guard_is_present(class_name):
 
 @pytest.mark.parametrize(
     "class_name",
-    ["GrowattGenericTime", "GrowattModTouTime"],
+    ["GrowattGenericTime"],
 )
 def test_the_guard_returns_before_writing(class_name):
     """A guard that logs but falls through would be decoration."""
@@ -85,7 +85,7 @@ def test_the_guard_returns_before_writing(class_name):
 
 @pytest.mark.parametrize(
     "class_name",
-    ["GrowattGenericTime", "GrowattModTouTime"],
+    ["GrowattGenericTime"],
 )
 def test_the_cached_fallback_still_writes(class_name):
     """`values_are_fresh` must be set False on the fallback branch. Skipping on stale data

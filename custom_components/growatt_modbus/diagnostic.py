@@ -107,6 +107,7 @@ SERVICE_DETECT_GRID_ORIENTATION = "detect_grid_orientation"
 SERVICE_READ_REGISTER = "read_register"
 SERVICE_SET_BATTERY_MODE = "set_battery_mode"
 SERVICE_SYNC_TOU_SCHEDULE = "sync_tou_schedule"
+SERVICE_SET_TOU_PERIOD = "set_tou_period"
 SERVICE_GET_REGISTER_DATA = "get_register_data"
 SERVICE_SYNC_INVERTER_TIME = "sync_inverter_time"
 
@@ -282,6 +283,16 @@ SERVICE_SYNC_TOU_SCHEDULE_SCHEMA = vol.Schema(
             })
         ]),
         vol.Optional("default_mode", default=0): vol.All(vol.Coerce(int), vol.Range(min=0, max=2)),
+    }
+)
+SERVICE_SET_TOU_PERIOD_SCHEMA = vol.Schema(
+    {
+        vol.Required("device_id"): cv.string,
+        vol.Required("period"): vol.All(vol.Coerce(int), vol.Range(min=1, max=9)),
+        vol.Required("start"): cv.time,
+        vol.Required("end"): cv.time,
+        vol.Required("priority"): vol.All(vol.Coerce(int), vol.In([0, 1, 2])),
+        vol.Required("enabled"): cv.boolean,
     }
 )
 SERVICE_SYNC_INVERTER_TIME_SCHEMA = vol.Schema(
@@ -873,6 +884,41 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             "inverter_time": before.isoformat() if before else None,
             "home_assistant_time": now.isoformat(),
             "drift_seconds": drift,
+        }
+
+    async def set_tou_period(call: ServiceCall) -> dict:
+        """Apply one complete MOD/MIN TL-XH TOU period in one operation."""
+        device_id = call.data["device_id"]
+        device_reg = dr.async_get(hass)
+        device_entry = device_reg.async_get(device_id)
+        if not device_entry:
+            raise HomeAssistantError(f"Device {device_id} not found")
+
+        config_entry_id = _config_entry_id_for_device(hass, device_entry)
+        if not config_entry_id:
+            raise HomeAssistantError(f"No config entry found for device {device_id}")
+
+        coordinator = _coordinator_for_entry(hass, config_entry_id)
+        if coordinator is None:
+            raise HomeAssistantError(f"Coordinator not found for device {device_id}")
+
+        from .tou_editor import TouEditorError, get_tou_editor
+
+        try:
+            result = await get_tou_editor(coordinator).async_set_tou_period(
+                call.data["period"],
+                call.data["start"],
+                call.data["end"],
+                call.data["priority"],
+                call.data["enabled"],
+            )
+        except TouEditorError as err:
+            raise HomeAssistantError(str(err)) from err
+
+        return {
+            "period": call.data["period"],
+            "written": result.written,
+            "registers": list(result.pair),
         }
 
     async def detect_grid_orientation(call: ServiceCall) -> None:
@@ -1719,6 +1765,14 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         SERVICE_SYNC_TOU_SCHEDULE,
         sync_tou_schedule,
         schema=SERVICE_SYNC_TOU_SCHEDULE_SCHEMA,
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SET_TOU_PERIOD,
+        set_tou_period,
+        schema=SERVICE_SET_TOU_PERIOD_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
     )
 
     hass.services.async_register(

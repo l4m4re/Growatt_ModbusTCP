@@ -6,14 +6,13 @@ one period inside a poll interval collided: the second write was based on the wo
 the first, and put it back. A MID 25KTL3-XH owner setting several TOU values in a row found
 it hit and miss.
 
-The packing and the choice of source live in tou_packing.py, which is importable here; the
-selects and time entities import Home Assistant, so their use of it is checked from source.
+The packing lives in tou_packing.py, which is importable here; the selects and time entities
+import Home Assistant, so their staged write path is checked from source.
 """
 from __future__ import annotations
 
 import ast
 import importlib
-import types
 from pathlib import Path
 
 import pytest
@@ -23,7 +22,6 @@ COMPONENT = Path(__file__).parent.parent / "custom_components" / "growatt_modbus
 
 # Period 3 from the reporter's scans: 0xCF00 = enabled, Grid, 15:00; end 0x1000 = 16:00.
 GRID_ON_1500 = 0xCF00
-END_1600 = 0x1000
 
 
 def test_priority_keeps_time_and_enable():
@@ -39,45 +37,6 @@ def test_time_keeps_enable_and_priority():
     assert tou.with_time(GRID_ON_1500, 7, 30) == 0xC71E
 
 
-def test_the_fresh_pair_wins_over_the_last_poll():
-    stale = types.SimpleNamespace(mod_tou_3_start=0, mod_tou_3_end=0)
-    start, end, fresh = tou.current_pair([GRID_ON_1500, END_1600], stale,
-                                         "mod_tou_3_start", "mod_tou_3_end")
-    assert (start, end, fresh) == (GRID_ON_1500, END_1600, True)
-
-
-def test_a_failed_read_falls_back_to_the_last_poll():
-    data = types.SimpleNamespace(mod_tou_3_start=GRID_ON_1500, mod_tou_3_end=END_1600)
-    assert tou.current_pair(None, data, "mod_tou_3_start", "mod_tou_3_end") == (
-        GRID_ON_1500, END_1600, False)
-
-
-def test_the_reporters_sequence_no_longer_reverts():
-    """Priority -> Battery, then Enable -> Disabled before the next poll.
-
-    The poll still says Grid. Built from it, the second write sends Grid back. Built from
-    the inverter, it keeps the Battery written a moment earlier."""
-    inverter = {"start": GRID_ON_1500, "end": END_1600}
-    last_poll = types.SimpleNamespace(mod_tou_3_start=GRID_ON_1500, mod_tou_3_end=END_1600)
-
-    def change(apply):
-        start, end, _ = tou.current_pair([inverter["start"], inverter["end"]], last_poll,
-                                         "mod_tou_3_start", "mod_tou_3_end")
-        inverter["start"] = apply(start)
-
-    change(lambda s: tou.with_priority(s, 1))       # Battery
-    change(lambda s: tou.with_enable(s, False))     # Disabled
-
-    assert (inverter["start"] >> 13) & 0x3 == 1, "the priority change was undone"
-    assert inverter["start"] >> 15 == 0
-
-
-def test_publish_updates_the_shared_data():
-    data = types.SimpleNamespace(mod_tou_3_start=0, mod_tou_3_end=0)
-    tou.publish(data, "mod_tou_3_start", "mod_tou_3_end", GRID_ON_1500, END_1600)
-    assert (data.mod_tou_3_start, data.mod_tou_3_end) == (GRID_ON_1500, END_1600)
-
-
 def _method(path: str, cls: str, name: str) -> str:
     source = (COMPONENT / path).read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -88,12 +47,11 @@ def _method(path: str, cls: str, name: str) -> str:
 
 
 @pytest.mark.parametrize("cls", ["GrowattModTouPriority", "GrowattModTouEnable"])
-def test_the_selects_read_fresh_before_modifying(cls):
+def test_the_selects_only_update_the_draft(cls):
     body = _method("select.py", cls, "async_select_option")
-    assert "read_holding_registers" in body
-    assert "tou_current_pair(" in body
-    assert body.index("read_holding_registers") < body.index("write_registers")
-    assert "getattr(data, self._start_field" not in body, "still building from the last poll"
+    assert "update_draft" in body
+    assert "read_holding_registers" not in body
+    assert "write_registers" not in body
 
 
 @pytest.mark.parametrize("path, cls, name", [
@@ -101,7 +59,14 @@ def test_the_selects_read_fresh_before_modifying(cls):
     ("select.py", "GrowattModTouEnable", "async_select_option"),
     ("time.py", "GrowattModTouTime", "async_set_value"),
 ])
-def test_every_tou_entity_publishes_what_it_wrote(path, cls, name):
+def test_every_tou_entity_updates_the_shared_draft(path, cls, name):
     body = _method(path, cls, name)
-    assert "tou_publish(" in body
-    assert "async_update_listeners()" in body
+    assert "update_draft" in body
+    assert "write_registers" not in body
+
+
+def test_mod_tou_setup_has_one_set_of_entities():
+    select_source = (COMPONENT / "select.py").read_text(encoding="utf-8")
+    time_source = (COMPONENT / "time.py").read_text(encoding="utf-8")
+    assert "GrowattTouDraft" not in select_source
+    assert "GrowattTouDraft" not in time_source

@@ -11,11 +11,11 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.exceptions import HomeAssistantError
 
-from .tou_packing import publish as tou_publish
 from .const import DOMAIN, WRITABLE_REGISTERS, CONF_REGISTER_MAP, get_device_type_for_control, DEVICE_TYPE_BATTERY, MOD_TOU_PERIODS, TOU_LOCKED_MESSAGE
 from .coordinator import GrowattModbusCoordinator
 from .entity import GrowattEntity
 from .growatt_modbus import ModbusWriteError, RATE_LIMITED_MESSAGE
+from .tou_editor import get_tou_editor
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ async def async_setup_entry(
                 entities.append(GrowattWitVppTouTime(coordinator, config_entry, _period, is_start=True))
                 entities.append(GrowattWitVppTouTime(coordinator, config_entry, _period, is_start=False))
 
-    # MOD TL3-XH TOU time pickers - not on firmware that rejects them (#485)
+    # MOD/MIN TL-XH staged TOU time pickers - not on firmware that rejects them (#485)
     if 3038 in holding_registers and coordinator.tou_legacy_locked:
         _LOGGER.info("MOD TOU time controls not created: firmware VPP %s (#485)",
                      coordinator.vpp_protocol_label)
@@ -349,8 +349,7 @@ class GrowattModTouTime(GrowattEntity, TimeEntity):
     Start registers encode: bit15=enable, bit13-14=priority, bit8-12=hour, bit0-7=minute.
     End registers encode: bit8-12=hour, bit0-7=minute (plain hex-packed).
 
-    Writing to a start register uses read-modify-write to preserve the priority/enable bits.
-    Writing to an end register does a plain hex-packed write.
+    Changes are staged and written with the complete period by Apply.
     """
 
     _attr_has_entity_name = True
@@ -386,117 +385,22 @@ class GrowattModTouTime(GrowattEntity, TimeEntity):
 
     @property
     def available(self) -> bool:
-        # Not on firmware that rejects legacy TOU writes (#485): the control would read
-        # the new modes wrongly and every change would revert.
+        # Not on firmware that rejects these TOU writes (#485).
         return super().available and not self.coordinator.tou_legacy_locked
 
     @property
     def native_value(self) -> dt_time | None:
-        """Return the current time value decoded from the packed register."""
-        data = self.coordinator.data
-        if data is None:
+        """Return the current draft time."""
+        draft = get_tou_editor(self.coordinator).draft(self._period)
+        if draft is None:
             return None
-        raw = getattr(data, self._data_field, None)
-        if raw is None:
-            return None
-        # For start registers: bits 8-12 = hour (5 bits, mask out priority/enable bits 13-15)
-        # For end registers: bits 8-15 = hour (but upper 3 bits should be 0 for valid times)
-        # Using & 0x1F safely extracts hours 0-23 for both register types
-        hours = (int(raw) >> 8) & 0x1F
-        minutes = int(raw) & 0xFF
-        try:
-            return dt_time(hours, minutes)
-        except ValueError:
-            _LOGGER.warning(
-                "Invalid packed time 0x%04X for %s — hours=%d, minutes=%d",
-                int(raw), self._data_field, hours, minutes,
-            )
-            return None
+        return draft.start if self._is_start else draft.end
 
     async def async_set_value(self, value: dt_time) -> None:
-        """Write time atomically — always write start+end together as a single FC16 transaction.
-
-        Writing both registers in one Modbus FC16 call prevents the inverter from ever seeing
-        a partial update (start changed but end not yet written), which can cause TOU reversion.
-        """
+        """Stage a new time without writing Modbus."""
         if self.coordinator.tou_legacy_locked:
             raise HomeAssistantError(
                 TOU_LOCKED_MESSAGE.format(version=self.coordinator.vpp_protocol_label))
-        period = self._period_def
-
-        # Read the current [start, end] pair fresh from hardware rather than trusting
-        # coordinator.data (stale by up to scan_interval). Stale siblings cause the second
-        # of two back-to-back writes in the same poll window to revert the first.
-        pair = await self.hass.async_add_executor_job(
-            self.coordinator.modbus_client.read_holding_registers, period["start_reg"], 2
+        get_tou_editor(self.coordinator).update_draft(
+            self._period, "start" if self._is_start else "end", value
         )
-        if pair is not None and len(pair) >= 2:
-            current_start, current_end = int(pair[0]), int(pair[1])
-            values_are_fresh = True
-        else:
-            _LOGGER.warning(
-                "MOD TOU period %d: could not read fresh register pair (reg %d) — falling back to cached data",
-                self._period, period["start_reg"],
-            )
-            data = self.coordinator.data
-            current_start = int(getattr(data, period["start_field"], 0) if data else 0)
-            current_end = int(getattr(data, period["end_field"], 0) if data else 0)
-            values_are_fresh = False
-
-        # Compute new start raw, preserving priority (bits 13-14) and enable (bit 15)
-        if self._is_start:
-            new_start = (current_start & 0xE000) | ((value.hour << 8) | value.minute)
-        else:
-            new_start = current_start  # unchanged — keep current start when writing end
-
-        # Compute new end raw (plain hex-packed)
-        if not self._is_start:
-            new_end = (value.hour << 8) | value.minute
-        else:
-            new_end = current_end  # unchanged — keep current end when writing start
-
-        slot = "start" if self._is_start else "end"
-
-        # Skip a write that would change nothing (#392) — see the matching note in
-        # GrowattGenericTime.async_set_value above. Only against a fresh read; the cached
-        # fallback may be a scan interval old, and a missed write is worse than a spare one.
-        #
-        # Comparing the raw words rather than the times matters here: new_start preserves
-        # the priority and enable bits (13-15) from the current value, so an equal
-        # comparison means the whole register is unchanged, not just the hour and minute.
-        if values_are_fresh and new_start == current_start and new_end == current_end:
-            _LOGGER.debug(
-                "MOD TOU period %d %s: already reads start=0x%04X end=0x%04X — skipping write",
-                self._period, slot, current_start, current_end,
-            )
-            return
-
-        try:
-            success = await self.hass.async_add_executor_job(
-                self.coordinator.modbus_client.write_registers,
-                period["start_reg"],
-                [new_start, new_end],
-            )
-        except ModbusWriteError:
-            _LOGGER.error(
-                "Failed to write MOD TOU period %d %s (atomic FC16 to register %d)",
-                self._period, slot, period["start_reg"],
-            )
-            return
-        if success:
-            _LOGGER.info(
-                "Set MOD TOU period %d %s to %s (start=0x%04X, end=0x%04X, atomic FC16)",
-                self._period, slot, value.strftime("%H:%M"), new_start, new_end,
-            )
-            self.coordinator.track_write(period["start_reg"], new_start, period["start_field"])
-            self.coordinator.track_write(period["end_reg"], new_end, period["end_field"])
-            # Show it on every entity of this period now, not after the next poll (#475).
-            tou_publish(self.coordinator.data, period["start_field"], period["end_field"],
-                        new_start, new_end)
-            self.coordinator.async_update_listeners()
-            await self.coordinator.async_request_refresh()
-        else:
-            _LOGGER.warning(
-                "MOD TOU period %d %s: atomic FC16 write returned False",
-                self._period, slot,
-            )

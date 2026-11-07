@@ -406,3 +406,58 @@ sync_tou_schedule:
               value: "1"
             - label: "Grid first"
               value: "2"
+
+set_tou_period:
+  name: Set TOU Period
+  description: >-
+    Apply one complete MOD/MIN TL-XH TOU period. The four values are read, compared and
+    written as one two-register FC16 transaction. This service does not write intermediate
+    values while a schedule is being edited.
+  fields:
+    device_id:
+      name: Device
+      description: The Growatt inverter device
+      required: true
+      selector:
+        device:
+          integration: growatt_modbus
+    period:
+      name: Period
+      description: TOU period number (1-9)
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 9
+          mode: box
+    start:
+      name: Begin
+      description: Period begin time
+      required: true
+      selector:
+        time:
+    end:
+      name: End
+      description: Period end time
+      required: true
+      selector:
+        time:
+    priority:
+      name: Mode
+      description: 0=Load Priority, 1=Battery Priority, 2=Grid Priority
+      required: true
+      selector:
+        select:
+          options:
+            - label: "Load Priority"
+              value: "0"
+            - label: "Battery Priority"
+              value: "1"
+            - label: "Grid Priority"
+              value: "2"
+    enabled:
+      name: On/Off
+      description: Enable or disable this TOU period
+      required: true
+      selector:
+        boolean:

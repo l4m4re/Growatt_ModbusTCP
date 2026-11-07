@@ -143,32 +143,6 @@ def _migrate_entity_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
             _try_rename(current, _new_eid(domain, device_type, friendly))
 
 
-def _enable_tou_entities_when_profile_allows(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Re-enable TOU entities that were disabled by an earlier integration default."""
-    register_map = entry.data.get(CONF_REGISTER_MAP, "")
-    if REGISTER_MAPS.get(register_map, {}).get("tou_disabled_by_default", False):
-        return
-
-    entity_registry = er.async_get(hass)
-    for period in range(1, 10):
-        for domain, suffix in (
-            ("select", "priority"),
-            ("select", "enable"),
-            ("time", "start"),
-            ("time", "end"),
-        ):
-            unique_id = f"{entry.entry_id}_mod_tou_{period}_{suffix}"
-            entity_id = entity_registry.async_get_entity_id(domain, DOMAIN, unique_id)
-            if not entity_id:
-                continue
-            entity = entity_registry.async_get(entity_id)
-            if entity is None:
-                continue
-            if entity.disabled_by is er.RegistryEntryDisabler.INTEGRATION:
-                entity_registry.async_update_entity(entity_id, disabled_by=None)
-                _LOGGER.info("Re-enabled TOU entity %s after profile default changed", entity_id)
-
-
 def _migrate_tou_entity_names(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Update existing TOU labels without changing their entity IDs."""
     entity_registry = er.async_get(hass)
@@ -564,7 +538,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     )
                     entity_registry.async_remove(stale_eid)
 
-    # MOD/MID TOU controls on firmware that rejects legacy TOU writes (#485). select.py and
+    # MOD/MID TOU controls on firmware that rejects these TOU writes (#485). select.py and
     # time.py no longer create them once 30099 is known, so remove the ones registered
     # before that - otherwise they linger as unavailable. Uses the version persisted in the
     # entry, so it does not depend on this session's first poll.
@@ -607,11 +581,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     _migrate_tou_entity_names(hass, entry)
-
-    if not REGISTER_MAPS.get(entry.data.get(CONF_REGISTER_MAP, ""), {}).get(
-        "tou_disabled_by_default", False
-    ):
-        hass.loop.call_later(1, _enable_tou_entities_when_profile_allows, hass, entry)
 
     return True
 

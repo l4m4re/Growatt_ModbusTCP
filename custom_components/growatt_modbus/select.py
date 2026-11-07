@@ -11,12 +11,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.exceptions import HomeAssistantError
 
-from .tou_packing import (
-    current_pair as tou_current_pair,
-    publish as tou_publish,
-    with_enable as tou_with_enable,
-    with_priority as tou_with_priority,
-)
 from .const import (
     DOMAIN,
     WRITABLE_REGISTERS,
@@ -33,6 +27,7 @@ from .const import (
 from .coordinator import GrowattModbusCoordinator
 from .entity import GrowattEntity
 from .growatt_modbus import ModbusWriteError, RATE_LIMITED_MESSAGE
+from .tou_editor import get_tou_editor
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -141,9 +136,8 @@ async def async_setup_entry(
         )
         _LOGGER.info("%s control enabled (register %d found)", control_name, register_num)
 
-    # MOD TL3-XH TOU priority and enable selects (9 periods × 2 = 18 entities)
-    # Not offered at all on firmware that rejects legacy TOU writes, once that is known
-    # (#485). Unknown at first setup: the entities then go unavailable once identified.
+    # MOD/MIN TL-XH staged TOU priority and enable selects (9 periods × 2 = 18 entities).
+    # Not offered on firmware that rejects these TOU writes, once that is known (#485).
     if 3038 in holding_registers and coordinator.tou_legacy_locked:
         _LOGGER.info("MOD TOU controls not created: this firmware (VPP %s) does not accept "
                      "TOU changes over Modbus (#485)", coordinator.vpp_protocol_label)
@@ -881,7 +875,7 @@ class GrowattModTouPriority(GrowattEntity, SelectEntity):
     """Priority select for one MOD TL3-XH TOU period.
 
     Extracts bits 13-14 from the period's start register.
-    Write uses read-modify-write to preserve time (bits 0-12) and enable (bit 15).
+    Changes are staged and written with the complete period by Apply.
     """
 
     _attr_entity_category = EntityCategory.CONFIG
@@ -910,63 +904,33 @@ class GrowattModTouPriority(GrowattEntity, SelectEntity):
 
     @property
     def available(self) -> bool:
-        # Not on firmware that rejects legacy TOU writes (#485): the control would read
-        # the new modes wrongly and every change would revert.
+        # Not on firmware that rejects these TOU writes (#485).
         return super().available and not self.coordinator.tou_legacy_locked
 
     @property
     def current_option(self) -> str | None:
-        """Return current priority option."""
-        data = self.coordinator.data
-        if data is None:
+        """Return the current draft priority option."""
+        draft = get_tou_editor(self.coordinator).draft(self._period)
+        if draft is None:
             return None
-        raw = getattr(data, self._start_field, 0)
-        priority = (int(raw) >> 13) & 0x3
-        return self._PRIORITY_MAP.get(priority)
+        return self._PRIORITY_MAP.get(draft.priority)
 
     async def async_select_option(self, option: str) -> None:
-        """Write new priority atomically — always write start+end together as a single FC16 transaction."""
+        """Stage a new priority without writing Modbus."""
         if self.coordinator.tou_legacy_locked:
             raise HomeAssistantError(
                 TOU_LOCKED_MESSAGE.format(version=self.coordinator.vpp_protocol_label))
         priority = self._PRIORITY_REVERSE.get(option)
         if priority is None:
-            return
-        # Read the pair fresh: the last poll may predate a write made seconds ago to this
-        # same start word (time, priority and enable share it), and rebuilding from that
-        # copy would undo it (#475).
-        fresh = await self.hass.async_add_executor_job(
-            self.coordinator.modbus_client.read_holding_registers, self._start_reg, 2
-        )
-        current_raw, current_end, _ = tou_current_pair(
-            fresh, self.coordinator.data, self._start_field, self._end_field
-        )
-        new_raw = tou_with_priority(current_raw, priority)
-        try:
-            success = await self.hass.async_add_executor_job(
-                self.coordinator.modbus_client.write_registers,
-                self._start_reg,
-                [new_raw, current_end],
-            )
-        except ModbusWriteError:
-            _LOGGER.error("Failed to write MOD TOU period %d priority (register %d, atomic FC16)", self._period, self._start_reg)
-            return
-        if success:
-            _LOGGER.info("Set MOD TOU period %d priority to %s (start=0x%04X, end=0x%04X, atomic FC16)", self._period, option, new_raw, current_end)
-            self.coordinator.track_write(self._start_reg, new_raw, self._start_field)
-            self.coordinator.track_write(self._end_reg, current_end, self._end_field)
-            # Show it on every entity of this period now, not after the next poll (#475).
-            tou_publish(self.coordinator.data, self._start_field, self._end_field,
-                        new_raw, current_end)
-            self.coordinator.async_update_listeners()
-            await self.coordinator.async_request_refresh()
+            raise HomeAssistantError(f"Unknown TOU mode: {option}")
+        get_tou_editor(self.coordinator).update_draft(self._period, "priority", priority)
 
 
 class GrowattModTouEnable(GrowattEntity, SelectEntity):
     """Enable/disable select for one MOD TL3-XH TOU period.
 
     Extracts bit 15 from the period's start register.
-    Write uses read-modify-write to preserve time (bits 0-12) and priority (bits 13-14).
+    Changes are staged and written with the complete period by Apply.
     """
 
     _attr_entity_category = EntityCategory.CONFIG
@@ -992,54 +956,27 @@ class GrowattModTouEnable(GrowattEntity, SelectEntity):
 
     @property
     def available(self) -> bool:
-        # Not on firmware that rejects legacy TOU writes (#485): the control would read
-        # the new modes wrongly and every change would revert.
+        # Not on firmware that rejects these TOU writes (#485).
         return super().available and not self.coordinator.tou_legacy_locked
 
     @property
     def current_option(self) -> str | None:
-        """Return current enable state."""
-        data = self.coordinator.data
-        if data is None:
+        """Return the current draft enable state."""
+        draft = get_tou_editor(self.coordinator).draft(self._period)
+        if draft is None:
             return None
-        raw = getattr(data, self._start_field, 0)
-        enabled = (int(raw) >> 15) & 0x1
-        return "Enabled" if enabled else "Disabled"
+        return "Enabled" if draft.enabled else "Disabled"
 
     async def async_select_option(self, option: str) -> None:
-        """Write new enable state atomically — always write start+end together as a single FC16 transaction."""
+        """Stage a new enable state without writing Modbus."""
         if self.coordinator.tou_legacy_locked:
             raise HomeAssistantError(
                 TOU_LOCKED_MESSAGE.format(version=self.coordinator.vpp_protocol_label))
-        enable = 1 if option == "Enabled" else 0
-        # Read the pair fresh: the last poll may predate a write made seconds ago to this
-        # same start word (time, priority and enable share it), and rebuilding from that
-        # copy would undo it (#475).
-        fresh = await self.hass.async_add_executor_job(
-            self.coordinator.modbus_client.read_holding_registers, self._start_reg, 2
+        if option not in {"Disabled", "Enabled"}:
+            raise HomeAssistantError(f"Unknown TOU On/Off value: {option}")
+        get_tou_editor(self.coordinator).update_draft(
+            self._period, "enabled", option == "Enabled"
         )
-        current_raw, current_end, _ = tou_current_pair(
-            fresh, self.coordinator.data, self._start_field, self._end_field
-        )
-        new_raw = tou_with_enable(current_raw, bool(enable))
-        try:
-            success = await self.hass.async_add_executor_job(
-                self.coordinator.modbus_client.write_registers,
-                self._start_reg,
-                [new_raw, current_end],
-            )
-        except ModbusWriteError:
-            _LOGGER.error("Failed to write MOD TOU period %d enable (register %d, atomic FC16)", self._period, self._start_reg)
-            return
-        if success:
-            _LOGGER.info("Set MOD TOU period %d enable to %s (start=0x%04X, end=0x%04X, atomic FC16)", self._period, option, new_raw, current_end)
-            self.coordinator.track_write(self._start_reg, new_raw, self._start_field)
-            self.coordinator.track_write(self._end_reg, current_end, self._end_field)
-            # Show it on every entity of this period now, not after the next poll (#475).
-            tou_publish(self.coordinator.data, self._start_field, self._end_field,
-                        new_raw, current_end)
-            self.coordinator.async_update_listeners()
-            await self.coordinator.async_request_refresh()
 
 
 class GrowattAllowGridChargeSelect(GrowattEntity, SelectEntity):
