@@ -506,6 +506,9 @@ MIN_TL_XH_3000_10000_V201 = {
                'valid_range': (1, 100), 'desc': 'Charge power rate when Battery First mode (1-100%)'},
         3048: {'name': 'batt_first_charge_stopped_soc',   'scale': 1, 'unit': '%', 'access': 'RW',
                'valid_range': (0, 100), 'desc': 'SOC to stop charging when Battery First mode is active (0-100%)'},
+        3049: {'name': 'allow_grid_charge', 'scale': 1, 'unit': '', 'access': 'RW',
+               'valid_range': (0, 1),
+               'desc': 'AC charging permission (0=Disabled, 1=Enabled)'},
         3067: {'name': 'grid_first_discharge_stopped_soc', 'scale': 1, 'unit': '%', 'access': 'RW',
                'valid_range': (1, 100), 'desc': 'SOC to stop discharging when Grid First mode is active (V1.39: US model / firmware ZACA-08+)'},
 

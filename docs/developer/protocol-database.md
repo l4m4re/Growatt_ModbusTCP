@@ -58,3 +58,34 @@ which registers your inverter actually responds to. This is the quickest way to
 verify protocol support and collect data for a new model.
 
 See [Diagnostic Actions](../troubleshooting/diagnostic-service.md) for usage instructions.
+
+## GII register source
+
+The project-independent register specification is maintained in
+`growatt-inverter-info`. Generate the local interchange snapshot from a
+checked-out sibling repository with:
+
+```bash
+python tools/export_gii_register_source.py \
+  --gii-spec ../growatt-inverter-info/spec/growatt-register-spec.json
+```
+
+The generated `Protocols/growatt_gii_register_source.json` contains the GII
+canonical name, table/function-code identity, datatype, scale, applicability,
+evidence state and provenance for every row, including the VPP 30000+ and
+31000+ blocks. It is a consumer source snapshot, not a second hand-maintained
+register map. Update it when the pinned GII commit changes.
+
+The ARM reverse-engineering correlation is exported separately so the
+consumer map and firmware evidence cannot be mistaken for one another:
+
+```bash
+python tools/export_zaba22_firmware_evidence.py
+```
+
+This creates `Protocols/growatt_zaba22_firmware_register_correlation.json`
+with the ZABA22 direct-route boundaries, provider/write-case evidence,
+document conflicts, the executable legacy-provider subset, scoped post-table
+searches and the offline capture-conformance aggregate. It contains derived
+public-safe evidence and hashes only; the firmware image and captures remain
+outside this repository.

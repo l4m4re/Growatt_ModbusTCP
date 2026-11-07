@@ -67,6 +67,22 @@ The setup wizard runs auto-detection automatically for VPP-capable inverters. Fo
 
 ## Support
 
+The register source is synchronized with GII using
+`python tools/export_gii_register_source.py`; the generated
+`Protocols/growatt_gii_register_source.json` includes the VPP 30000+/31000+
+projection and records the GII specification hash. Each row also preserves
+GII's `evidence.other_evidence` entries, including the evidence-bounded ZABA22
+ARM route, storage formula, write cases and separate semantic-name confidence;
+an ARM route match therefore does not silently promote a register name,
+scaling or unit to firmware-proven semantics.
+
+The public-safe ZABA22 ARM firmware correlation is synchronized separately
+with `python tools/export_zaba22_firmware_evidence.py`; the generated
+`Protocols/growatt_zaba22_firmware_register_correlation.json` records the GII
+evidence-artifact hash and preserves route, write-case, conflict,
+post-table-search, executable-provider and capture-conformance evidence
+without embedding firmware or captures.
+
 - **Issues & bug reports:** [GitHub Issues](https://github.com/0xAHA/Growatt_ModbusTCP/issues)
 - **Community:** [Home Assistant Forum](https://community.home-assistant.io/)
 
