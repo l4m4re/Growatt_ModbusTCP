@@ -975,9 +975,10 @@ WRITABLE_REGISTERS = {
         'scale': 1,
         'valid_range': (10, 100),
         'unit': '%',
-        'only_profiles': ['MIN_TL_XH_3000_10000_V201'],
-        'desc': 'SOC at which off-grid battery discharge stops. Defined by VPP V2.01 '
-                'and read/write confirmed on MIN TL-XH after a Growatt firmware update (#400).'
+        'only_profiles': ['MIN_TL_XH2_3000_10000_V201'],
+        'desc': 'SOC at which off-grid battery discharge stops. Defined by VPP V2.01 and '
+                'temporarily scoped to MIN TL-XH2 pending resolution of conflicting '
+                'first-generation evidence (#489).'
     },
     'vpp_charge_stop_soc': {
         'register': 30404,

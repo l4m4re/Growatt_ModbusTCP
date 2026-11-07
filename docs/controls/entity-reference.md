@@ -639,14 +639,17 @@ the grid while solar charged the battery).
 | Charge Power Rate | Number | 3047 | 1–100 % | Battery charge power limit when Battery First is active |
 | Charge Stopped SOC | Number | 3048 | 0–100 % | SOC at which charging stops when Battery First is active |
 | On-Grid Discharge Stop SOC | Number | 3067 | 1–100 % | SOC at which on-grid battery discharge stops |
-| Off-Grid Discharge Stop SOC | Number | 30475 | 10–100 % | SOC at which off-grid battery discharge stops (VPP V2.01) |
+
+Register 30475 (*Off-Grid Discharge Stop SOC*) is currently exposed only on the
+**MIN TL-XH2** profile while its profile scope is being reconciled with conflicting
+first-generation field evidence ([#489](https://github.com/0xAHA/Growatt_ModbusTCP/issues/489)).
 
 !!! warning "SOC-limit writes on DTC 5100 depend on the firmware build"
     On a MIN 4200TL-XH with an APX battery, firmware build **ALBA13** silently refused
     SOC-limit writes. There was no Modbus exception, but an immediate read-back over both
     FC06 and FC16 still held the old value, and the same change made in ShinePhone reverted
     too. Growatt then updated **the same inverter** to `ALBA18010122`, and registers 3048 and
-    3067 accepted changes. Register 30475 takes changes on that build as well: 16 → 20 → 16,
+    3067 accepted changes. Register 30475 also took changes on that build: 16 → 20 → 16,
     each still in place five minutes later
     ([#400](https://github.com/0xAHA/Growatt_ModbusTCP/issues/400),
     [#460](https://github.com/0xAHA/Growatt_ModbusTCP/pull/460)).

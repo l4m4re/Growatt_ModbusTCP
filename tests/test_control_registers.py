@@ -343,12 +343,11 @@ def test_mod_still_creates_the_controls_it_should():
 
 
 def test_min_tl_xh_exposes_the_firmware_confirmed_soc_controls():
-    """The SOC controls were confirmed on a live DTC-5100 after a firmware update."""
+    """The first-generation profile keeps its confirmed V1.39 SOC control."""
     map_key = "MIN_TL_XH_3000_10000_V201"
     holding = _holding(map_key)
     writable = {
         "grid_first_discharge_stopped_soc": 3067,
-        "vpp_offgrid_discharge_soc": 30475,
     }
 
     for name, address in writable.items():
@@ -356,6 +355,18 @@ def test_min_tl_xh_exposes_the_firmware_confirmed_soc_controls():
         assert str(holding[address].get("access", "")).upper() == "RW"
         assert WRITABLE_REGISTERS[name]["register"] == address
         assert name in _controls_created_for(map_key)
+
+
+def test_min_tl_xh2_exposes_the_temporarily_scoped_vpp_offgrid_soc_control():
+    """H30475 is XH2-only until the conflicting first-generation evidence is resolved."""
+    xh2 = "MIN_TL_XH2_3000_10000_V201"
+    first_generation = "MIN_TL_XH_3000_10000_V201"
+
+    assert _holding(xh2)[30475]["name"] == "vpp_offgrid_discharge_soc"
+    assert _holding(xh2)[30475]["access"] == "RW"
+    assert "vpp_offgrid_discharge_soc" in _controls_created_for(xh2)
+    assert 30475 not in _holding(first_generation)
+    assert "vpp_offgrid_discharge_soc" not in _controls_created_for(first_generation)
 
 
 def test_min_tl_xh_offers_the_grid_charge_control_for_hardware_validation():
