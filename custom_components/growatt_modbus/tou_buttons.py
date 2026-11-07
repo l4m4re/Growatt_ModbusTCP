@@ -43,6 +43,18 @@ class GrowattTouApplyButton(_TouButton):
         super().__init__(coordinator, config_entry, period, "apply")
         self._attr_name = f"TOU Period {period} Apply"
 
+    @property
+    def available(self) -> bool:
+        """Gray the button once the period has no unconfirmed draft changes."""
+        return super().available and get_tou_editor(self.coordinator).is_dirty(self._period)
+
+    @property
+    def icon(self) -> str:
+        """Make a pending Apply visually distinct from the confirmed state."""
+        if get_tou_editor(self.coordinator).is_dirty(self._period):
+            return "mdi:content-save-alert-outline"
+        return "mdi:content-save-check-outline"
+
     async def async_press(self) -> None:
         """Apply the draft or raise a clear error without losing it."""
         await get_tou_editor(self.coordinator).apply_period(self._period)
